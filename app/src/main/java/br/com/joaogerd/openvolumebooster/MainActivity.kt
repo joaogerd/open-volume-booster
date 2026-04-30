@@ -1,5 +1,6 @@
 package br.com.joaogerd.openvolumebooster
 
+import android.content.Intent
 import android.media.AudioManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import br.com.joaogerd.openvolumebooster.audio.AudioBoostService
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -44,7 +46,8 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     BoosterScreen(
                         initialVolume = currentMusicVolumePercent(),
-                        onVolumeChanged = { setMusicVolumePercent(it) }
+                        onVolumeChanged = { setMusicVolumePercent(it) },
+                        onServiceChanged = { running, boost -> updateBoostService(running, boost) }
                     )
                 }
             }
@@ -62,12 +65,24 @@ class MainActivity : ComponentActivity() {
         val index = ((percent.coerceIn(0f, 100f) / 100f) * max).roundToInt()
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, index, AudioManager.FLAG_SHOW_UI)
     }
+
+    private fun updateBoostService(running: Boolean, boost: Float) {
+        val intent = Intent(this, AudioBoostService::class.java).apply {
+            putExtra(AudioBoostService.EXTRA_BOOST_PERCENT, boost.roundToInt())
+        }
+        if (running) {
+            startService(intent)
+        } else {
+            stopService(intent)
+        }
+    }
 }
 
 @Composable
 private fun BoosterScreen(
     initialVolume: Float,
-    onVolumeChanged: (Float) -> Unit
+    onVolumeChanged: (Float) -> Unit,
+    onServiceChanged: (Boolean, Float) -> Unit
 ) {
     var running by remember { mutableStateOf(false) }
     var volume by remember { mutableFloatStateOf(initialVolume.coerceIn(0f, 100f)) }
@@ -86,7 +101,10 @@ private fun BoosterScreen(
         ) {
             Button(
                 modifier = Modifier.weight(1f).height(58.dp),
-                onClick = { running = !running }
+                onClick = {
+                    running = !running
+                    onServiceChanged(running, boost)
+                }
             ) {
                 Text(if (running) "PARAR SERVICO" else "INICIAR SERVICO", fontSize = 18.sp)
             }
@@ -104,7 +122,10 @@ private fun BoosterScreen(
         ControlSlider(
             label = "Boost",
             value = boost,
-            onValueChange = { boost = it.coerceIn(0f, 100f) }
+            onValueChange = {
+                boost = it.coerceIn(0f, 100f)
+                if (running) onServiceChanged(true, boost)
+            }
         )
 
         Spacer(modifier = Modifier.height(8.dp))
