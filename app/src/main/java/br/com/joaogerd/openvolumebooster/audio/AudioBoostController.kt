@@ -3,31 +3,33 @@ package br.com.joaogerd.openvolumebooster.audio
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
+import kotlin.math.log10
 
 /**
  * Controller for Android audio effects.
  *
- * The preferred path is attaching the effects to the real audio session exposed
- * by the media app. Session 0 is kept only as a fallback because many Android
- * devices ignore global effects for third-party players.
+ * The booster level follows the same idea used by many volume booster apps:
+ * 100 means normal level, 150 means about 1.5x, 175 means about 1.75x.
+ * Internally this is converted to dB/mB using 20 * log10(multiplier), which
+ * avoids the aggressive clipping caused by linear gain mapping.
  */
 class AudioBoostController {
     private val chains = linkedMapOf<Int, EffectChain>()
-    private var boostPercent: Int = 0
+    private var boostLevel: Int = DEFAULT_LEVEL
 
-    fun enable(percent: Int, sessionId: Int = GLOBAL_AUDIO_SESSION): BoostState {
-        boostPercent = percent.coerceIn(0, 100)
+    fun enable(level: Int, sessionId: Int = GLOBAL_AUDIO_SESSION): BoostState {
+        boostLevel = level.coerceIn(MIN_LEVEL, MAX_LEVEL)
         val chain = chains.getOrPut(sessionId) { EffectChain(sessionId) }
-        return chain.enable(boostPercent)
+        return chain.enable(boostLevel)
     }
 
-    fun update(percent: Int): BoostState {
-        boostPercent = percent.coerceIn(0, 100)
+    fun update(level: Int): BoostState {
+        boostLevel = level.coerceIn(MIN_LEVEL, MAX_LEVEL)
         if (chains.isEmpty()) {
-            return enable(boostPercent, GLOBAL_AUDIO_SESSION)
+            return enable(boostLevel, GLOBAL_AUDIO_SESSION)
         }
 
-        val states = chains.map { (_, chain) -> chain.enable(boostPercent) }
+        val states = chains.map { (_, chain) -> chain.enable(boostLevel) }
         val enabled = states.filterIsInstance<BoostState.Enabled>()
         return if (enabled.isNotEmpty()) {
             BoostState.Enabled(enabled.joinToString(separator = " | ") { it.message })
@@ -55,7 +57,12 @@ class AudioBoostController {
         private var equalizer: Equalizer? = null
         private var bassBoost: BassBoost? = null
 
-        fun enable(boostPercent: Int): BoostState {
+        fun enable(level: Int): BoostState {
+            if (level <= 0) {
+                disable()
+                return BoostState.Disabled("session $sessionId: muted booster level")
+            }
+
             val messages = mutableListOf<String>()
             var enabledEffects = 0
 
@@ -63,11 +70,11 @@ class AudioBoostController {
                 if (loudnessEnhancer == null) {
                     loudnessEnhancer = LoudnessEnhancer(sessionId)
                 }
-                loudnessEnhancer?.setTargetGain(percentToGainMb(boostPercent))
-                loudnessEnhancer?.enabled = true
+                loudnessEnhancer?.setTargetGain(levelToGainMb(level))
+                loudnessEnhancer?.enabled = level > DEFAULT_LEVEL
             }.onSuccess {
                 enabledEffects += 1
-                messages += "session $sessionId: loudness"
+                messages += "session $sessionId: loudness=${levelToGainMb(level)}mB"
             }.onFailure { error ->
                 messages += "session $sessionId: loudness failed: ${error.message ?: "unsupported"}"
             }
@@ -76,11 +83,10 @@ class AudioBoostController {
                 if (equalizer == null) {
                     equalizer = Equalizer(0, sessionId)
                 }
-                applyEqualizerBoost(boostPercent)
-                equalizer?.enabled = true
+                applyFlatEqualizer()
+                equalizer?.enabled = false
             }.onSuccess {
-                enabledEffects += 1
-                messages += "equalizer"
+                messages += "equalizer=flat"
             }.onFailure { error ->
                 messages += "equalizer failed: ${error.message ?: "unsupported"}"
             }
@@ -89,11 +95,11 @@ class AudioBoostController {
                 if (bassBoost == null) {
                     bassBoost = BassBoost(0, sessionId)
                 }
-                bassBoost?.setStrength(percentToBassStrength(boostPercent))
-                bassBoost?.enabled = true
+                bassBoost?.setStrength(levelToBassStrength(level))
+                bassBoost?.enabled = levelToBassStrength(level) > 0
             }.onSuccess {
                 enabledEffects += 1
-                messages += "bass"
+                messages += "bass=${levelToBassStrength(level)}"
             }.onFailure { error ->
                 messages += "bass failed: ${error.message ?: "unsupported"}"
             }
@@ -121,32 +127,36 @@ class AudioBoostController {
             bassBoost = null
         }
 
-        private fun applyEqualizerBoost(boostPercent: Int) {
+        private fun applyFlatEqualizer() {
             val currentEqualizer = equalizer ?: return
             val bandRange = currentEqualizer.bandLevelRange
-            val minLevel = bandRange[0]
-            val maxLevel = bandRange[1]
-            val targetLevel = ((boostPercent / 100f) * maxLevel).toInt().toShort()
-            val safeLevel = targetLevel.coerceIn(minLevel, maxLevel).toShort()
-
+            val flatLevel = 0.coerceIn(bandRange[0].toInt(), bandRange[1].toInt()).toShort()
             for (band in 0 until currentEqualizer.numberOfBands) {
-                currentEqualizer.setBandLevel(band.toShort(), safeLevel)
+                currentEqualizer.setBandLevel(band.toShort(), flatLevel)
             }
         }
 
-        private fun percentToGainMb(percent: Int): Int {
-            return ((percent / 100f) * MAX_GAIN_MB).toInt().coerceIn(0, MAX_GAIN_MB)
+        private fun levelToGainMb(level: Int): Int {
+            if (level <= DEFAULT_LEVEL) return 0
+            val multiplier = level / DEFAULT_LEVEL.toFloat()
+            val db = 20.0 * log10(multiplier.toDouble())
+            return (db * 100.0).toInt().coerceIn(0, MAX_GAIN_MB)
         }
 
-        private fun percentToBassStrength(percent: Int): Short {
-            return ((percent / 100f) * MAX_BASS_STRENGTH).toInt().coerceIn(0, MAX_BASS_STRENGTH).toShort()
+        private fun levelToBassStrength(level: Int): Short {
+            if (level <= DEFAULT_LEVEL) return 0
+            val normalized = (level - DEFAULT_LEVEL).toFloat() / (MAX_LEVEL - DEFAULT_LEVEL).toFloat()
+            return (normalized * MAX_BASS_STRENGTH).toInt().coerceIn(0, MAX_BASS_STRENGTH).toShort()
         }
     }
 
     companion object {
         const val GLOBAL_AUDIO_SESSION = 0
-        private const val MAX_GAIN_MB = 5000
-        private const val MAX_BASS_STRENGTH = 1000
+        const val MIN_LEVEL = 0
+        const val DEFAULT_LEVEL = 100
+        const val MAX_LEVEL = 200
+        private const val MAX_GAIN_MB = 700
+        private const val MAX_BASS_STRENGTH = 250
     }
 }
 
