@@ -3,9 +3,12 @@ package br.com.joaogerd.openvolumebooster
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +26,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +41,8 @@ import androidx.compose.ui.unit.sp
 import br.com.joaogerd.openvolumebooster.audio.AudioBoostService
 import br.com.joaogerd.openvolumebooster.audio.BoostGainModel
 import br.com.joaogerd.openvolumebooster.audio.BoostRisk
+import br.com.joaogerd.openvolumebooster.audio.InternalAudioPlayer
+import br.com.joaogerd.openvolumebooster.audio.PlayerState
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -51,6 +57,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     BoosterScreen(
+                        context = this,
                         initialVolume = currentMusicVolumePercent(),
                         initialBoost = prefs.getInt(KEY_BOOST_PERCENT, 0).toFloat(),
                         onVolumeChanged = { setMusicVolumePercent(it) },
@@ -88,22 +95,43 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun BoosterScreen(
+    context: Context,
     initialVolume: Float,
     initialBoost: Float,
     onVolumeChanged: (Float) -> Unit,
     onBoostChanged: (Float) -> Unit,
     onServiceChanged: (Boolean, Float) -> Unit
 ) {
+    val internalPlayer = remember { InternalAudioPlayer(context.applicationContext) }
+    DisposableEffect(Unit) {
+        onDispose { internalPlayer.release() }
+    }
+
     var running by remember { mutableStateOf(false) }
     var volume by remember { mutableFloatStateOf(initialVolume.coerceIn(0f, 100f)) }
     var boost by remember { mutableFloatStateOf(initialBoost.coerceIn(0f, 100f)) }
+    var selectedUri by remember { mutableStateOf<Uri?>(null) }
+    var playerStatus by remember { mutableStateOf("Nenhum audio carregado no player interno.") }
+    var playerMode by remember { mutableStateOf(false) }
     val profile = BoostGainModel.compute(boost.roundToInt(), volume.roundToInt())
+
+    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            selectedUri = uri
+            playerMode = true
+            playerStatus = when (val state = internalPlayer.load(uri, boost.roundToInt(), volume.roundToInt())) {
+                is PlayerState.Ready -> state.message
+                is PlayerState.Error -> state.message
+                else -> state.message
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
             modifier = Modifier.fillMaxWidth(),
@@ -113,35 +141,74 @@ private fun BoosterScreen(
             fontWeight = FontWeight.Bold
         )
 
-        StatusCard(running = running, risk = profile.risk, gainDb = profile.targetGainDb)
+        StatusCard(running = running || playerMode, risk = profile.risk, gainDb = profile.targetGainDb)
+
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Player interno", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("Use este modo para garantir booster real em fone ou Bluetooth. Ele processa a sessao do proprio app.", fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(modifier = Modifier.weight(1f), onClick = { audioPicker.launch("audio/*") }) {
+                        Text("Escolher audio")
+                    }
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        enabled = selectedUri != null,
+                        onClick = {
+                            playerMode = true
+                            onServiceChanged(false, boost)
+                            running = false
+                            playerStatus = internalPlayer.play().message
+                        }
+                    ) { Text("Play") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        enabled = selectedUri != null,
+                        onClick = { playerStatus = internalPlayer.pause().message }
+                    ) { Text("Pause") }
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        enabled = selectedUri != null,
+                        onClick = { playerStatus = internalPlayer.stop().message }
+                    ) { Text("Stop") }
+                }
+                Text(playerStatus, fontSize = 14.sp)
+            }
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
             PresetButton("Normal", 0f, Modifier.weight(1f)) { value ->
                 boost = value
                 onBoostChanged(value)
+                internalPlayer.updateBoost(value.roundToInt(), volume.roundToInt())
                 if (running) onServiceChanged(true, value)
             }
             PresetButton("Moderado", 45f, Modifier.weight(1f)) { value ->
                 boost = value
                 onBoostChanged(value)
+                internalPlayer.updateBoost(value.roundToInt(), volume.roundToInt())
                 if (running) onServiceChanged(true, value)
             }
             PresetButton("Alto", 75f, Modifier.weight(1f)) { value ->
                 boost = value
                 onBoostChanged(value)
+                internalPlayer.updateBoost(value.roundToInt(), volume.roundToInt())
                 if (running) onServiceChanged(true, value)
             }
         }
 
         Button(
-            modifier = Modifier.fillMaxWidth().height(60.dp),
+            modifier = Modifier.fillMaxWidth().height(54.dp),
             colors = ButtonDefaults.buttonColors(),
             onClick = {
                 running = !running
+                playerMode = false
                 onServiceChanged(running, boost)
             }
         ) {
-            Text(if (running) "PARAR BOOSTER" else "INICIAR BOOSTER", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text(if (running) "PARAR BOOSTER EXTERNO" else "INICIAR BOOSTER EXTERNO", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
 
         ControlSlider(
@@ -150,27 +217,29 @@ private fun BoosterScreen(
             onValueChange = {
                 volume = it
                 onVolumeChanged(it)
+                internalPlayer.updateBoost(boost.roundToInt(), volume.roundToInt())
                 if (running) onServiceChanged(true, boost)
             }
         )
 
         ControlSlider(
-            label = "Boost protegido",
+            label = "Boost perceptual",
             value = boost,
             onValueChange = {
                 boost = it.coerceIn(0f, 100f)
                 onBoostChanged(boost)
+                internalPlayer.updateBoost(boost.roundToInt(), volume.roundToInt())
                 if (running) onServiceChanged(true, boost)
             }
         )
 
         Text(
-            text = "Ganho aplicado: ${profile.targetGainDb} dB | Headroom estimado: ${profile.headroomDb} dB",
-            fontSize = 16.sp,
+            text = "Ganho: ${profile.targetGainDb} dB | Presenca: ${profile.presenceBoostMb} mB | Grave: ${profile.bassBoostStrength}",
+            fontSize = 15.sp,
             fontWeight = FontWeight.Medium
         )
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(2.dp))
         WarningCard(profile.risk)
     }
 }
@@ -202,7 +271,7 @@ private fun PresetButton(label: String, value: Float, modifier: Modifier, onClic
 @Composable
 private fun ControlSlider(label: String, value: Float, onValueChange: (Float) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = "$label: ${value.roundToInt()}%", fontSize = 20.sp, fontWeight = FontWeight.Medium)
+        Text(text = "$label: ${value.roundToInt()}%", fontSize = 19.sp, fontWeight = FontWeight.Medium)
         Slider(value = value, onValueChange = onValueChange, valueRange = 0f..100f)
     }
 }
@@ -210,12 +279,12 @@ private fun ControlSlider(label: String, value: Float, onValueChange: (Float) ->
 @Composable
 private fun WarningCard(risk: BoostRisk) {
     val text = when (risk) {
-        BoostRisk.OFF -> "O controle de volume do sistema continua independente do booster."
+        BoostRisk.OFF -> "O modo externo depende do player. O player interno aplica o booster na sessao real do audio."
         BoostRisk.SAFE -> "Use volumes confortaveis e evite exposicao prolongada."
-        BoostRisk.MODERATE -> "Boost moderado pode aumentar distorcao dependendo do app, fone ou alto-falante."
+        BoostRisk.MODERATE -> "Boost moderado pode aumentar distorcao dependendo do fone, Bluetooth ou alto-falante."
         BoostRisk.HIGH -> "Atencao: boost alto pode causar clipping, fadiga auditiva e dano a alto-falantes. Reduza se ouvir distorcao."
     }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Text(modifier = Modifier.padding(18.dp), text = text, fontSize = 17.sp, lineHeight = 24.sp)
+        Text(modifier = Modifier.padding(18.dp), text = text, fontSize = 16.sp, lineHeight = 23.sp)
     }
 }
