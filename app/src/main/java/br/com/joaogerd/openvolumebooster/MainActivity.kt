@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import br.com.joaogerd.openvolumebooster.audio.AudioBoostService
@@ -94,19 +96,44 @@ private fun BoosterScreen(
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        Row(
+        Text(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            text = "Open Volume Booster",
+            textAlign = TextAlign.Center,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
         ) {
-            Button(
-                modifier = Modifier.weight(1f).height(58.dp),
-                onClick = {
-                    running = !running
-                    onServiceChanged(running, boost)
-                }
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(if (running) "PARAR SERVICO" else "INICIAR SERVICO", fontSize = 18.sp)
+                Text(
+                    text = if (running) "BOOSTER ATIVO" else "BOOSTER DESLIGADO",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Button(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(64.dp),
+                    colors = ButtonDefaults.buttonColors(),
+                    onClick = {
+                        running = !running
+                        onServiceChanged(running, boost)
+                    }
+                ) {
+                    Text(
+                        text = if (running) "PARAR BOOSTER" else "INICIAR BOOSTER",
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
