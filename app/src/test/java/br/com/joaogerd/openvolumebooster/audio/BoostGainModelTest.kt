@@ -10,14 +10,16 @@ class BoostGainModelTest {
         val profile = BoostGainModel.compute(0, 80)
         assertEquals(0f, profile.inputGainDb, 0.0f)
         assertEquals(0, profile.loudnessGainMb)
+        assertEquals(0, profile.presenceBoostMb)
+        assertEquals(0, profile.bassBoostStrength.toInt())
         assertEquals(BoostRisk.OFF, profile.risk)
     }
 
     @Test
-    fun strongerGainIsAudibleButClampedAtFullSystemVolume() {
+    fun perceptualGainIsAudibleButClampedAtFullSystemVolume() {
         val profile = BoostGainModel.compute(200, 100)
-        assertTrue(profile.loudnessGainMb <= 2500)
-        assertTrue(profile.perceptualGainDb <= 17.0f)
+        assertTrue(profile.loudnessGainMb <= 3400)
+        assertTrue(profile.perceptualGainDb <= 22.0f)
         assertEquals(BoostRisk.HIGH, profile.risk)
     }
 
@@ -37,15 +39,17 @@ class BoostGainModelTest {
     }
 
     @Test
-    fun moderatePresetUsesModerateRisk() {
+    fun moderatePresetUsesModerateRiskAndPresenceBoost() {
         val profile = BoostGainModel.compute(45, 50)
         assertEquals(BoostRisk.MODERATE, profile.risk)
+        assertTrue(profile.presenceBoostMb > 0)
     }
 
     @Test
-    fun highBoostUsesLimiterHeadroom() {
+    fun highBoostUsesLimiterHeadroomAndBassBoost() {
         val profile = BoostGainModel.compute(90, 90)
         assertTrue(profile.limiterThresholdDb < 0f)
         assertTrue(profile.headroomDb > 0f)
+        assertTrue(profile.bassBoostStrength > 0)
     }
 }
