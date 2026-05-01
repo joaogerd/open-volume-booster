@@ -2,36 +2,32 @@ package br.com.joaogerd.openvolumebooster.audio
 
 import android.media.audiofx.LoudnessEnhancer
 
-/**
- * Minimal and predictable booster controller.
- *
- * This intentionally uses only LoudnessEnhancer. Equalizer and BassBoost were
- * removed from the booster path because combining them with loudness gain caused
- * early clipping on real devices.
- *
- * The public input is a boost percent from 0 to 100. Internally it is converted
- * to millibels using a BoostX-like curve: targetGain = percent * 25.
- */
 class AudioBoostController {
     private val chains = linkedMapOf<Int, EffectChain>()
     private var boostPercent: Int = 0
+    private var systemVolumePercent: Int = 100
 
-    fun enable(percent: Int, sessionId: Int = GLOBAL_AUDIO_SESSION): BoostState {
-        boostPercent = percent.coerceIn(MIN_PERCENT, MAX_PERCENT)
+    fun enable(
+        percent: Int,
+        sessionId: Int = GLOBAL_AUDIO_SESSION,
+        volumePercent: Int = systemVolumePercent
+    ): BoostState {
+        boostPercent = percent.coerceIn(BoostGainModel.MIN_PERCENT, BoostGainModel.MAX_PERCENT)
+        systemVolumePercent = volumePercent.coerceIn(0, 100)
         val chain = chains.getOrPut(sessionId) { EffectChain(sessionId) }
-        return chain.enable(boostPercent)
+        return chain.enable(BoostGainModel.compute(boostPercent, systemVolumePercent))
     }
 
-    fun update(percent: Int): BoostState {
-        boostPercent = percent.coerceIn(MIN_PERCENT, MAX_PERCENT)
-        if (chains.isEmpty()) {
-            return enable(boostPercent, GLOBAL_AUDIO_SESSION)
-        }
+    fun update(percent: Int, volumePercent: Int = systemVolumePercent): BoostState {
+        boostPercent = percent.coerceIn(BoostGainModel.MIN_PERCENT, BoostGainModel.MAX_PERCENT)
+        systemVolumePercent = volumePercent.coerceIn(0, 100)
+        val profile = BoostGainModel.compute(boostPercent, systemVolumePercent)
+        if (chains.isEmpty()) return enable(boostPercent, GLOBAL_AUDIO_SESSION, systemVolumePercent)
 
-        val states = chains.map { (_, chain) -> chain.enable(boostPercent) }
+        val states = chains.map { (_, chain) -> chain.enable(profile) }
         val enabled = states.filterIsInstance<BoostState.Enabled>()
         return if (enabled.isNotEmpty()) {
-            BoostState.Enabled(enabled.joinToString(separator = " | ") { it.message })
+            BoostState.Enabled(profile, enabled.joinToString(separator = " | ") { it.message })
         } else {
             BoostState.Error(states.joinToString(separator = "\n") { it.message })
         }
@@ -54,18 +50,14 @@ class AudioBoostController {
     private class EffectChain(private val sessionId: Int) {
         private var loudnessEnhancer: LoudnessEnhancer? = null
 
-        fun enable(boostPercent: Int): BoostState {
+        fun enable(profile: BoostProfile): BoostState {
             return try {
-                if (loudnessEnhancer == null) {
-                    loudnessEnhancer = LoudnessEnhancer(sessionId)
-                }
+                if (loudnessEnhancer == null) loudnessEnhancer = LoudnessEnhancer(sessionId)
+                loudnessEnhancer?.setTargetGain(profile.targetGainMb)
+                loudnessEnhancer?.enabled = profile.targetGainMb > 0
 
-                val gainMb = percentToGainMb(boostPercent)
-                loudnessEnhancer?.setTargetGain(gainMb)
-                loudnessEnhancer?.enabled = boostPercent > 0
-
-                if (boostPercent > 0) {
-                    BoostState.Enabled("session $sessionId: loudness=${gainMb}mB")
+                if (profile.targetGainMb > 0) {
+                    BoostState.Enabled(profile, "session $sessionId: loudness=${profile.targetGainMb}mB")
                 } else {
                     BoostState.Disabled("session $sessionId: boost=0")
                 }
@@ -83,26 +75,19 @@ class AudioBoostController {
             runCatching { loudnessEnhancer?.release() }
             loudnessEnhancer = null
         }
-
-        private fun percentToGainMb(percent: Int): Int {
-            return (percent.coerceIn(MIN_PERCENT, MAX_PERCENT) * GAIN_MB_PER_PERCENT)
-                .coerceIn(0, MAX_GAIN_MB)
-        }
     }
 
     companion object {
         const val GLOBAL_AUDIO_SESSION = 0
-        const val MIN_PERCENT = 0
-        const val MAX_PERCENT = 100
-        private const val GAIN_MB_PER_PERCENT = 25
-        private const val MAX_GAIN_MB = 2500
+        const val MIN_PERCENT = BoostGainModel.MIN_PERCENT
+        const val MAX_PERCENT = BoostGainModel.MAX_PERCENT
     }
 }
 
 sealed interface BoostState {
     val message: String
 
-    data class Enabled(override val message: String) : BoostState
+    data class Enabled(val profile: BoostProfile, override val message: String) : BoostState
     data class Disabled(override val message: String) : BoostState
     data class Error(override val message: String) : BoostState
 }
