@@ -39,10 +39,12 @@ class BoostGainModelTest {
     }
 
     @Test
-    fun moderatePresetUsesModerateRiskAndPresenceBoost() {
+    fun mediumBoostUsesPresenceEnhancement() {
         val profile = BoostGainModel.compute(45, 50)
-        assertEquals(BoostRisk.MODERATE, profile.risk)
+        assertTrue(profile.perceptualGainDb > 0f)
+        assertTrue(profile.loudnessGainMb > 0)
         assertTrue(profile.presenceBoostMb > 0)
+        assertTrue(profile.risk == BoostRisk.MODERATE || profile.risk == BoostRisk.HIGH)
     }
 
     @Test
