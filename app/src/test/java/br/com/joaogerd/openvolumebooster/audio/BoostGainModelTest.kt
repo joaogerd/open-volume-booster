@@ -8,14 +8,16 @@ class BoostGainModelTest {
     @Test
     fun zeroBoostProducesNoGain() {
         val profile = BoostGainModel.compute(0, 80)
-        assertEquals(0, profile.targetGainMb)
+        assertEquals(0f, profile.inputGainDb, 0.0f)
+        assertEquals(0, profile.fallbackLoudnessGainMb)
         assertEquals(BoostRisk.OFF, profile.risk)
     }
 
     @Test
-    fun gainIsClampedToSafeRange() {
+    fun strongerGainIsStillClampedAtFullSystemVolume() {
         val profile = BoostGainModel.compute(200, 100)
-        assertTrue(profile.targetGainMb <= 650)
+        assertTrue(profile.inputGainDb <= 10.5f)
+        assertTrue(profile.fallbackLoudnessGainMb <= 1150)
         assertEquals(BoostRisk.HIGH, profile.risk)
     }
 
@@ -23,7 +25,8 @@ class BoostGainModelTest {
     fun highSystemVolumeReducesMaximumGain() {
         val lowVolume = BoostGainModel.compute(100, 50)
         val highVolume = BoostGainModel.compute(100, 100)
-        assertTrue(highVolume.targetGainMb < lowVolume.targetGainMb)
+        assertTrue(highVolume.inputGainDb < lowVolume.inputGainDb)
+        assertTrue(highVolume.fallbackLoudnessGainMb < lowVolume.fallbackLoudnessGainMb)
     }
 
     @Test
@@ -37,5 +40,12 @@ class BoostGainModelTest {
     fun moderatePresetUsesModerateRisk() {
         val profile = BoostGainModel.compute(45, 50)
         assertEquals(BoostRisk.MODERATE, profile.risk)
+    }
+
+    @Test
+    fun highBoostUsesLimiterHeadroom() {
+        val profile = BoostGainModel.compute(90, 90)
+        assertTrue(profile.limiterThresholdDb < 0f)
+        assertTrue(profile.headroomDb > 0f)
     }
 }
