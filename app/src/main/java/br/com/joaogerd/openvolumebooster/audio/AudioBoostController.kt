@@ -1,16 +1,18 @@
 package br.com.joaogerd.openvolumebooster.audio
 
 import android.media.audiofx.LoudnessEnhancer
+import kotlin.math.pow
 
 /**
  * Minimal and predictable booster controller.
  *
- * This intentionally uses only LoudnessEnhancer. Equalizer and BassBoost were
- * removed from the booster path because combining them with loudness gain caused
- * early clipping on real devices.
+ * This intentionally uses only LoudnessEnhancer. Equalizer and BassBoost are kept
+ * out of the booster path because combining tonal boosts with loudness gain makes
+ * clipping happen much earlier.
  *
- * The public input is a boost percent from 0 to 100. Internally it is converted
- * to millibels using a BoostX-like curve: targetGain = percent * 25.
+ * The public input is a boost percent from 0 to 100. The gain curve is deliberately
+ * conservative and non-linear: it gives useful gain while avoiding the very large
+ * +10 dB jump that happened when 40% was mapped to 1000 mB.
  */
 class AudioBoostController {
     private val chains = linkedMapOf<Int, EffectChain>()
@@ -85,8 +87,9 @@ class AudioBoostController {
         }
 
         private fun percentToGainMb(percent: Int): Int {
-            return (percent.coerceIn(MIN_PERCENT, MAX_PERCENT) * GAIN_MB_PER_PERCENT)
-                .coerceIn(0, MAX_GAIN_MB)
+            val normalized = percent.coerceIn(MIN_PERCENT, MAX_PERCENT) / 100.0
+            val curved = normalized.pow(GAIN_CURVE_EXPONENT)
+            return (curved * MAX_SAFE_GAIN_MB).toInt().coerceIn(0, MAX_SAFE_GAIN_MB)
         }
     }
 
@@ -94,8 +97,9 @@ class AudioBoostController {
         const val GLOBAL_AUDIO_SESSION = 0
         const val MIN_PERCENT = 0
         const val MAX_PERCENT = 100
-        private const val GAIN_MB_PER_PERCENT = 25
-        private const val MAX_GAIN_MB = 2500
+
+        private const val MAX_SAFE_GAIN_MB = 900
+        private const val GAIN_CURVE_EXPONENT = 1.35
     }
 }
 
