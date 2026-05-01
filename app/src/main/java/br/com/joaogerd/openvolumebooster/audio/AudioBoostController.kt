@@ -77,17 +77,18 @@ class AudioBoostController {
                     dynamicsProcessing = DynamicsProcessing(0, sessionId, config)
                 }
 
-                dynamicsProcessing?.setInputGainByChannelIndex(0, profile.inputGainDb)
+                dynamicsProcessing?.setInputGainbyChannel(0, profile.inputGainDb)
                 dynamicsProcessing?.setLimiterByChannelIndex(
                     0,
                     DynamicsProcessing.Limiter(
                         true,
                         true,
                         0,
-                        1,
-                        60f,
-                        profile.limiterPostGainDb,
-                        profile.limiterThresholdDb
+                        LIMITER_ATTACK_MS,
+                        LIMITER_RELEASE_MS,
+                        LIMITER_RATIO,
+                        profile.limiterThresholdDb,
+                        profile.limiterPostGainDb
                     )
                 )
                 dynamicsProcessing?.enabled = true
@@ -128,6 +129,9 @@ class AudioBoostController {
         const val GLOBAL_AUDIO_SESSION = 0
         const val MIN_PERCENT = BoostGainModel.MIN_PERCENT
         const val MAX_PERCENT = BoostGainModel.MAX_PERCENT
+        private const val LIMITER_ATTACK_MS = 1f
+        private const val LIMITER_RELEASE_MS = 60f
+        private const val LIMITER_RATIO = 12f
     }
 }
 
