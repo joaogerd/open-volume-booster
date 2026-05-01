@@ -12,37 +12,38 @@ object BoostGainModel {
         val volume = systemVolumePercent.coerceIn(0, 100)
         if (percent == 0) return BoostProfile.off(volume)
 
-        val maxInputGainDb = when {
-            volume >= 95 -> 10.5f
-            volume >= 85 -> 12.0f
-            volume >= 70 -> 14.0f
-            else -> 16.0f
+        val maxPerceptualGainDb = when {
+            volume >= 95 -> 17.0f
+            volume >= 85 -> 20.0f
+            volume >= 70 -> 23.0f
+            else -> 25.0f
         }
         val shaped = smoothStep(percent / 100f)
-        val inputGainDb = shaped * maxInputGainDb
-        val protectedInputGainDb = applyHighVolumeProtection(inputGainDb, percent, volume)
+        val perceptualGainDb = applyHighVolumeProtection(shaped * maxPerceptualGainDb, percent, volume)
+        val loudnessGainMb = (perceptualGainDb * 100f).toInt().coerceIn(0, 2500)
+        val dynamicsInputGainDb = (perceptualGainDb * 0.55f).coerceIn(0f, 12f)
         val limiterThresholdDb = when {
-            volume >= 90 -> -4.0f
-            percent >= 80 -> -3.0f
-            else -> -2.0f
+            volume >= 90 -> -6.0f
+            percent >= 80 -> -5.0f
+            else -> -3.0f
         }
-        val fallbackLoudnessGainDb = (protectedInputGainDb * 0.72f).coerceIn(0f, 11.5f)
         val risk = when {
-            protectedInputGainDb <= 0.1f -> BoostRisk.OFF
-            percent >= 80 || volume >= 90 || protectedInputGainDb >= 11.5f -> BoostRisk.HIGH
-            percent >= 45 || volume >= 75 || protectedInputGainDb >= 6.0f -> BoostRisk.MODERATE
+            perceptualGainDb <= 0.1f -> BoostRisk.OFF
+            percent >= 80 || volume >= 90 || perceptualGainDb >= 16.0f -> BoostRisk.HIGH
+            percent >= 45 || volume >= 75 || perceptualGainDb >= 8.0f -> BoostRisk.MODERATE
             else -> BoostRisk.SAFE
         }
 
         return BoostProfile(
             requestedPercent = percent,
             systemVolumePercent = volume,
-            inputGainDb = round1(protectedInputGainDb),
-            fallbackLoudnessGainMb = (fallbackLoudnessGainDb * 100f).toInt(),
+            inputGainDb = round1(dynamicsInputGainDb),
+            loudnessGainMb = loudnessGainMb,
             limiterThresholdDb = limiterThresholdDb,
             limiterPostGainDb = 0f,
             headroomDb = -limiterThresholdDb,
-            risk = risk
+            risk = risk,
+            perceptualGainDb = round1(perceptualGainDb)
         )
     }
 
@@ -55,9 +56,9 @@ object BoostGainModel {
 
     private fun applyHighVolumeProtection(gainDb: Float, percent: Int, volume: Int): Float {
         val reduction = when {
-            percent >= 90 && volume >= 90 -> 2.4f
-            percent >= 80 && volume >= 85 -> 1.6f
-            percent >= 70 && volume >= 95 -> 1.2f
+            percent >= 95 && volume >= 95 -> 3.0f
+            percent >= 90 && volume >= 90 -> 2.0f
+            percent >= 80 && volume >= 85 -> 1.0f
             else -> 0f
         }
         return (gainDb - reduction).coerceAtLeast(0f)
@@ -75,19 +76,21 @@ data class BoostProfile(
     val requestedPercent: Int,
     val systemVolumePercent: Int,
     val inputGainDb: Float,
-    val fallbackLoudnessGainMb: Int,
+    val loudnessGainMb: Int,
     val limiterThresholdDb: Float,
     val limiterPostGainDb: Float,
     val headroomDb: Float,
-    val risk: BoostRisk
+    val risk: BoostRisk,
+    val perceptualGainDb: Float
 ) {
-    val targetGainMb: Int get() = fallbackLoudnessGainMb
-    val targetGainDb: Float get() = inputGainDb
+    val fallbackLoudnessGainMb: Int get() = loudnessGainMb
+    val targetGainMb: Int get() = loudnessGainMb
+    val targetGainDb: Float get() = perceptualGainDb
     val message: String get() = when (risk) {
         BoostRisk.OFF -> "Boost desligado"
-        BoostRisk.SAFE -> "Boost seguro: $requestedPercent%, ganho=${inputGainDb}dB"
-        BoostRisk.MODERATE -> "Boost moderado: $requestedPercent%, ganho=${inputGainDb}dB"
-        BoostRisk.HIGH -> "Boost alto protegido: $requestedPercent%, ganho=${inputGainDb}dB"
+        BoostRisk.SAFE -> "Boost seguro: $requestedPercent%, ganho=${perceptualGainDb}dB"
+        BoostRisk.MODERATE -> "Boost moderado: $requestedPercent%, ganho=${perceptualGainDb}dB"
+        BoostRisk.HIGH -> "Boost alto: $requestedPercent%, ganho=${perceptualGainDb}dB"
     }
 
     companion object {
@@ -95,11 +98,12 @@ data class BoostProfile(
             requestedPercent = 0,
             systemVolumePercent = volume,
             inputGainDb = 0f,
-            fallbackLoudnessGainMb = 0,
+            loudnessGainMb = 0,
             limiterThresholdDb = 0f,
             limiterPostGainDb = 0f,
             headroomDb = 0f,
-            risk = BoostRisk.OFF
+            risk = BoostRisk.OFF,
+            perceptualGainDb = 0f
         )
     }
 }
