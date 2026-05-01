@@ -1,5 +1,6 @@
 package br.com.joaogerd.openvolumebooster
 
+import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.os.Bundle
@@ -34,10 +35,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import br.com.joaogerd.openvolumebooster.audio.AudioBoostService
+import br.com.joaogerd.openvolumebooster.audio.BoostGainModel
+import br.com.joaogerd.openvolumebooster.audio.BoostRisk
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var audioManager: AudioManager
+    private val prefs by lazy { getSharedPreferences("booster", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,7 +52,9 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     BoosterScreen(
                         initialVolume = currentMusicVolumePercent(),
+                        initialBoost = prefs.getInt(KEY_BOOST_PERCENT, 0).toFloat(),
                         onVolumeChanged = { setMusicVolumePercent(it) },
+                        onBoostChanged = { prefs.edit().putInt(KEY_BOOST_PERCENT, it.roundToInt()).apply() },
                         onServiceChanged = { running, boost -> updateBoostService(running, boost) }
                     )
                 }
@@ -72,29 +78,32 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, AudioBoostService::class.java).apply {
             putExtra(AudioBoostService.EXTRA_BOOST_PERCENT, boost.roundToInt())
         }
-        if (running) {
-            startService(intent)
-        } else {
-            stopService(intent)
-        }
+        if (running) startService(intent) else stopService(intent)
+    }
+
+    private companion object {
+        const val KEY_BOOST_PERCENT = "boost_percent"
     }
 }
 
 @Composable
 private fun BoosterScreen(
     initialVolume: Float,
+    initialBoost: Float,
     onVolumeChanged: (Float) -> Unit,
+    onBoostChanged: (Float) -> Unit,
     onServiceChanged: (Boolean, Float) -> Unit
 ) {
     var running by remember { mutableStateOf(false) }
     var volume by remember { mutableFloatStateOf(initialVolume.coerceIn(0f, 100f)) }
-    var boost by remember { mutableFloatStateOf(0f) }
+    var boost by remember { mutableFloatStateOf(initialBoost.coerceIn(0f, 100f)) }
+    val profile = BoostGainModel.compute(boost.roundToInt(), volume.roundToInt())
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         Text(
             modifier = Modifier.fillMaxWidth(),
@@ -104,99 +113,109 @@ private fun BoosterScreen(
             fontWeight = FontWeight.Bold
         )
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = if (running) "BOOSTER ATIVO" else "BOOSTER DESLIGADO",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Button(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(64.dp),
-                    colors = ButtonDefaults.buttonColors(),
-                    onClick = {
-                        running = !running
-                        onServiceChanged(running, boost)
-                    }
-                ) {
-                    Text(
-                        text = if (running) "PARAR BOOSTER" else "INICIAR BOOSTER",
-                        fontSize = 21.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+        StatusCard(running = running, risk = profile.risk, gainDb = profile.targetGainDb)
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            PresetButton("Normal", 0f, Modifier.weight(1f)) { value ->
+                boost = value
+                onBoostChanged(value)
+                if (running) onServiceChanged(true, value)
+            }
+            PresetButton("Moderado", 45f, Modifier.weight(1f)) { value ->
+                boost = value
+                onBoostChanged(value)
+                if (running) onServiceChanged(true, value)
+            }
+            PresetButton("Alto", 75f, Modifier.weight(1f)) { value ->
+                boost = value
+                onBoostChanged(value)
+                if (running) onServiceChanged(true, value)
             }
         }
 
+        Button(
+            modifier = Modifier.fillMaxWidth().height(60.dp),
+            colors = ButtonDefaults.buttonColors(),
+            onClick = {
+                running = !running
+                onServiceChanged(running, boost)
+            }
+        ) {
+            Text(if (running) "PARAR BOOSTER" else "INICIAR BOOSTER", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
+
         ControlSlider(
-            label = "Vol.",
+            label = "Volume do sistema",
             value = volume,
             onValueChange = {
                 volume = it
                 onVolumeChanged(it)
-            }
-        )
-
-        ControlSlider(
-            label = "Boost",
-            value = boost,
-            onValueChange = {
-                boost = it.coerceIn(0f, 100f)
                 if (running) onServiceChanged(true, boost)
             }
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        ControlSlider(
+            label = "Boost protegido",
+            value = boost,
+            onValueChange = {
+                boost = it.coerceIn(0f, 100f)
+                onBoostChanged(boost)
+                if (running) onServiceChanged(true, boost)
+            }
+        )
 
-        WarningCard(boost = boost)
-    }
-}
-
-@Composable
-private fun ControlSlider(
-    label: String,
-    value: Float,
-    onValueChange: (Float) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-            text = "$label: ${value.roundToInt()}%",
-            fontSize = 22.sp,
+            text = "Ganho aplicado: ${profile.targetGainDb} dB | Headroom estimado: ${profile.headroomDb} dB",
+            fontSize = 16.sp,
             fontWeight = FontWeight.Medium
         )
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = 0f..100f
-        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+        WarningCard(profile.risk)
     }
 }
 
 @Composable
-private fun WarningCard(boost: Float) {
-    val extra = if (boost > 40f) {
-        "\n\nBoost acima de 40% pode causar distorcao com mais facilidade."
-    } else {
-        ""
+private fun StatusCard(running: Boolean, risk: BoostRisk, gainDb: Float) {
+    val status = if (running) "BOOSTER ATIVO" else "BOOSTER DESLIGADO"
+    val riskText = when (risk) {
+        BoostRisk.OFF -> "Sem reforco de ganho"
+        BoostRisk.SAFE -> "Faixa segura"
+        BoostRisk.MODERATE -> "Faixa moderada"
+        BoostRisk.HIGH -> "Proximo da saturacao"
     }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(status, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("$riskText | ${gainDb} dB", fontSize = 17.sp)
+        }
+    }
+}
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Text(
-            modifier = Modifier.padding(18.dp),
-            text = "Advertencia: volumes altos podem danificar alto-falantes e audicao. Use por sua conta e risco.$extra",
-            fontSize = 18.sp,
-            lineHeight = 25.sp
-        )
+@Composable
+private fun PresetButton(label: String, value: Float, modifier: Modifier, onClick: (Float) -> Unit) {
+    Button(modifier = modifier, onClick = { onClick(value) }) {
+        Text(label, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun ControlSlider(label: String, value: Float, onValueChange: (Float) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(text = "$label: ${value.roundToInt()}%", fontSize = 20.sp, fontWeight = FontWeight.Medium)
+        Slider(value = value, onValueChange = onValueChange, valueRange = 0f..100f)
+    }
+}
+
+@Composable
+private fun WarningCard(risk: BoostRisk) {
+    val text = when (risk) {
+        BoostRisk.OFF -> "O controle de volume do sistema continua independente do booster."
+        BoostRisk.SAFE -> "Use volumes confortaveis e evite exposicao prolongada."
+        BoostRisk.MODERATE -> "Boost moderado pode aumentar distorcao dependendo do app, fone ou alto-falante."
+        BoostRisk.HIGH -> "Atencao: boost alto pode causar clipping, fadiga auditiva e dano a alto-falantes. Reduza se ouvir distorcao."
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Text(modifier = Modifier.padding(18.dp), text = text, fontSize = 17.sp, lineHeight = 24.sp)
     }
 }
