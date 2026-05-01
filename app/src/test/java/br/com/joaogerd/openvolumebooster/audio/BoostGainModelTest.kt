@@ -9,15 +9,15 @@ class BoostGainModelTest {
     fun zeroBoostProducesNoGain() {
         val profile = BoostGainModel.compute(0, 80)
         assertEquals(0f, profile.inputGainDb, 0.0f)
-        assertEquals(0, profile.fallbackLoudnessGainMb)
+        assertEquals(0, profile.loudnessGainMb)
         assertEquals(BoostRisk.OFF, profile.risk)
     }
 
     @Test
-    fun strongerGainIsStillClampedAtFullSystemVolume() {
+    fun strongerGainIsAudibleButClampedAtFullSystemVolume() {
         val profile = BoostGainModel.compute(200, 100)
-        assertTrue(profile.inputGainDb <= 10.5f)
-        assertTrue(profile.fallbackLoudnessGainMb <= 1150)
+        assertTrue(profile.loudnessGainMb <= 2500)
+        assertTrue(profile.perceptualGainDb <= 17.0f)
         assertEquals(BoostRisk.HIGH, profile.risk)
     }
 
@@ -25,8 +25,8 @@ class BoostGainModelTest {
     fun highSystemVolumeReducesMaximumGain() {
         val lowVolume = BoostGainModel.compute(100, 50)
         val highVolume = BoostGainModel.compute(100, 100)
-        assertTrue(highVolume.inputGainDb < lowVolume.inputGainDb)
-        assertTrue(highVolume.fallbackLoudnessGainMb < lowVolume.fallbackLoudnessGainMb)
+        assertTrue(highVolume.perceptualGainDb < lowVolume.perceptualGainDb)
+        assertTrue(highVolume.loudnessGainMb < lowVolume.loudnessGainMb)
     }
 
     @Test
