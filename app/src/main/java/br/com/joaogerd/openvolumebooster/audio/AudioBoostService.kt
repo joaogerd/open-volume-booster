@@ -5,13 +5,16 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import android.os.Build
 import android.os.IBinder
+import kotlin.math.roundToInt
 
 class AudioBoostService : Service() {
     private val controller = AudioBoostController()
-    private var boostLevel: Int = AudioBoostController.DEFAULT_LEVEL
+    private lateinit var audioManager: AudioManager
+    private var boostPercent: Int = 0
 
     private val audioSessionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -22,7 +25,7 @@ class AudioBoostService : Service() {
                         AudioBoostController.GLOBAL_AUDIO_SESSION
                     )
                     if (sessionId != AudioBoostController.GLOBAL_AUDIO_SESSION) {
-                        controller.enable(boostLevel, sessionId)
+                        controller.enable(boostPercent, sessionId, currentMusicVolumePercent())
                     }
                 }
 
@@ -39,6 +42,7 @@ class AudioBoostService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        audioManager = getSystemService(AudioManager::class.java)
         val filter = IntentFilter().apply {
             addAction(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
             addAction(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
@@ -55,9 +59,9 @@ class AudioBoostService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val boostPercent = intent?.getIntExtra(EXTRA_BOOST_PERCENT, 0) ?: 0
-        boostLevel = percentToLevel(boostPercent)
-        controller.update(boostLevel)
+        boostPercent = intent?.getIntExtra(EXTRA_BOOST_PERCENT, boostPercent) ?: boostPercent
+        boostPercent = boostPercent.coerceIn(AudioBoostController.MIN_PERCENT, AudioBoostController.MAX_PERCENT)
+        controller.update(boostPercent, currentMusicVolumePercent())
         return START_STICKY
     }
 
@@ -68,9 +72,10 @@ class AudioBoostService : Service() {
         super.onDestroy()
     }
 
-    private fun percentToLevel(percent: Int): Int {
-        val safePercent = percent.coerceIn(0, 100)
-        return AudioBoostController.DEFAULT_LEVEL + safePercent
+    private fun currentMusicVolumePercent(): Int {
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        return ((current.toFloat() / max.toFloat()) * 100f).roundToInt().coerceIn(0, 100)
     }
 
     companion object {
