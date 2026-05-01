@@ -1,8 +1,11 @@
 package br.com.joaogerd.openvolumebooster.audio
 
+import android.media.audiofx.BassBoost
 import android.media.audiofx.DynamicsProcessing
+import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Build
+import kotlin.math.abs
 
 class AudioBoostController {
     private val chains = linkedMapOf<Int, EffectChain>()
@@ -44,6 +47,8 @@ class AudioBoostController {
 
     private class EffectChain(private val sessionId: Int) {
         private var loudnessEnhancer: LoudnessEnhancer? = null
+        private var equalizer: Equalizer? = null
+        private var bassBoost: BassBoost? = null
         private var dynamicsProcessing: DynamicsProcessing? = null
 
         fun enable(profile: BoostProfile): BoostState {
@@ -53,6 +58,8 @@ class AudioBoostController {
             }
 
             val loudnessState = enableLoudness(profile)
+            runCatching { enablePresenceEqualizer(profile) }
+            runCatching { enableBassBoost(profile) }
             runCatching { enableDynamicsLimiter(profile) }
             return loudnessState
         }
@@ -62,11 +69,42 @@ class AudioBoostController {
                 if (loudnessEnhancer == null) loudnessEnhancer = LoudnessEnhancer(sessionId)
                 loudnessEnhancer?.setTargetGain(profile.loudnessGainMb)
                 loudnessEnhancer?.enabled = true
-                BoostState.Enabled(profile, "session $sessionId: loudness=${profile.loudnessGainMb}mB")
+                BoostState.Enabled(profile, "session $sessionId: loudness=${profile.loudnessGainMb}mB presence=${profile.presenceBoostMb}mB bass=${profile.bassBoostStrength}")
             } catch (exception: RuntimeException) {
                 release()
                 BoostState.Error("session $sessionId: loudness failed: ${exception.message ?: "unsupported"}")
             }
+        }
+
+        private fun enablePresenceEqualizer(profile: BoostProfile) {
+            if (profile.presenceBoostMb <= 0) return
+            if (equalizer == null) equalizer = Equalizer(0, sessionId)
+            val eq = equalizer ?: return
+            val range = eq.bandLevelRange
+            val minLevel = range[0]
+            val maxLevel = range[1]
+            val presenceLevel = profile.presenceBoostMb.coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
+            val lowCutLevel = (-profile.presenceBoostMb / 4).coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
+
+            for (bandIndex in 0 until eq.numberOfBands) {
+                val band = bandIndex.toShort()
+                val freqHz = eq.getCenterFreq(band) / 1000
+                val level = when {
+                    freqHz < 180 -> lowCutLevel
+                    isPresenceFrequency(freqHz) -> presenceLevel
+                    freqHz > 7000 -> (presenceLevel / 2).toShort()
+                    else -> 0
+                }
+                eq.setBandLevel(band, level)
+            }
+            eq.enabled = true
+        }
+
+        private fun enableBassBoost(profile: BoostProfile) {
+            if (profile.bassBoostStrength <= 0) return
+            if (bassBoost == null) bassBoost = BassBoost(0, sessionId)
+            bassBoost?.setStrength(profile.bassBoostStrength)
+            bassBoost?.enabled = true
         }
 
         private fun enableDynamicsLimiter(profile: BoostProfile) {
@@ -105,14 +143,25 @@ class AudioBoostController {
 
         fun disable() {
             runCatching { loudnessEnhancer?.enabled = false }
+            runCatching { equalizer?.enabled = false }
+            runCatching { bassBoost?.enabled = false }
             runCatching { dynamicsProcessing?.enabled = false }
         }
 
         fun release() {
             runCatching { loudnessEnhancer?.release() }
+            runCatching { equalizer?.release() }
+            runCatching { bassBoost?.release() }
             runCatching { dynamicsProcessing?.release() }
             loudnessEnhancer = null
+            equalizer = null
+            bassBoost = null
             dynamicsProcessing = null
+        }
+
+        private fun isPresenceFrequency(freqHz: Int): Boolean {
+            val centers = intArrayOf(1000, 2000, 3000, 4000, 6000)
+            return centers.any { abs(freqHz - it) <= 900 }
         }
     }
 
