@@ -4,6 +4,7 @@ import android.media.audiofx.BassBoost
 import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
+import android.media.audiofx.Virtualizer
 import android.os.Build
 import kotlin.math.abs
 
@@ -49,6 +50,7 @@ class AudioBoostController {
         private var loudnessEnhancer: LoudnessEnhancer? = null
         private var equalizer: Equalizer? = null
         private var bassBoost: BassBoost? = null
+        private var virtualizer: Virtualizer? = null
         private var dynamicsProcessing: DynamicsProcessing? = null
 
         fun enable(profile: BoostProfile): BoostState {
@@ -60,6 +62,7 @@ class AudioBoostController {
             val loudnessState = enableLoudness(profile)
             runCatching { enablePresenceEqualizer(profile) }
             runCatching { enableBassBoost(profile) }
+            runCatching { enableVirtualizer(profile) }
             runCatching { enableDynamicsLimiter(profile) }
             return loudnessState
         }
@@ -78,13 +81,13 @@ class AudioBoostController {
 
         private fun enablePresenceEqualizer(profile: BoostProfile) {
             if (profile.presenceBoostMb <= 0) return
-            if (equalizer == null) equalizer = Equalizer(0, sessionId)
+            if (equalizer == null) equalizer = Equalizer(EFFECT_PRIORITY, sessionId)
             val eq = equalizer ?: return
             val range = eq.bandLevelRange
             val minLevel = range[0]
             val maxLevel = range[1]
             val presenceLevel = profile.presenceBoostMb.coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
-            val lowCutLevel = (-profile.presenceBoostMb / 4).coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
+            val lowCutLevel = (-profile.presenceBoostMb / 5).coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
 
             for (bandIndex in 0 until eq.numberOfBands) {
                 val band = bandIndex.toShort()
@@ -102,9 +105,20 @@ class AudioBoostController {
 
         private fun enableBassBoost(profile: BoostProfile) {
             if (profile.bassBoostStrength <= 0) return
-            if (bassBoost == null) bassBoost = BassBoost(0, sessionId)
+            if (bassBoost == null) bassBoost = BassBoost(EFFECT_PRIORITY, sessionId)
             bassBoost?.setStrength(profile.bassBoostStrength)
             bassBoost?.enabled = true
+        }
+
+        private fun enableVirtualizer(profile: BoostProfile) {
+            val strength = when {
+                profile.requestedPercent >= 75 -> 350
+                profile.requestedPercent >= 45 -> 220
+                else -> 100
+            }.toShort()
+            if (virtualizer == null) virtualizer = Virtualizer(EFFECT_PRIORITY, sessionId)
+            virtualizer?.setStrength(strength)
+            virtualizer?.enabled = true
         }
 
         private fun enableDynamicsLimiter(profile: BoostProfile) {
@@ -121,7 +135,7 @@ class AudioBoostController {
                     1,
                     true
                 ).build()
-                dynamicsProcessing = DynamicsProcessing(0, sessionId, config)
+                dynamicsProcessing = DynamicsProcessing(EFFECT_PRIORITY, sessionId, config)
             }
 
             dynamicsProcessing?.setInputGainbyChannel(0, 0f)
@@ -145,6 +159,7 @@ class AudioBoostController {
             runCatching { loudnessEnhancer?.enabled = false }
             runCatching { equalizer?.enabled = false }
             runCatching { bassBoost?.enabled = false }
+            runCatching { virtualizer?.enabled = false }
             runCatching { dynamicsProcessing?.enabled = false }
         }
 
@@ -152,10 +167,12 @@ class AudioBoostController {
             runCatching { loudnessEnhancer?.release() }
             runCatching { equalizer?.release() }
             runCatching { bassBoost?.release() }
+            runCatching { virtualizer?.release() }
             runCatching { dynamicsProcessing?.release() }
             loudnessEnhancer = null
             equalizer = null
             bassBoost = null
+            virtualizer = null
             dynamicsProcessing = null
         }
 
@@ -169,6 +186,7 @@ class AudioBoostController {
         const val GLOBAL_AUDIO_SESSION = 0
         const val MIN_PERCENT = BoostGainModel.MIN_PERCENT
         const val MAX_PERCENT = BoostGainModel.MAX_PERCENT
+        private const val EFFECT_PRIORITY = 1000
         private const val LIMITER_ATTACK_MS = 1f
         private const val LIMITER_RELEASE_MS = 60f
         private const val LIMITER_RATIO = 12f
